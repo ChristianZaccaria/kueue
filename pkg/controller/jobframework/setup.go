@@ -22,13 +22,37 @@ import (
 	"fmt"
 	"os"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/restmapper"
+	"k8s.io/client-go/tools/cache"
+
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 
+	"k8s.io/apimachinery/pkg/watch"
+	retrywatch "k8s.io/client-go/tools/watch"
+
 	"sigs.k8s.io/kueue/pkg/controller/jobs/noop"
+)
+
+const (
+	RayClusterCRD  = "rayclusters.ray.io"
+	RayJobCRD      = "rayjobs.ray.io"
+	RayServiceCRD  = "rayservices.ray.io"
+	MPIJobsCRD     = "mpijobs.kubeflow.org"
+	MXJobsCRD      = "mxjobs.kubeflow.org"
+	PaddleJobsCRD  = "paddlejobs.kubeflow.org"
+	PyTorchJobsCRD = "pytorchjobs.kubeflow.org"
+	TFJobsCRD      = "tfjobs.kubeflow.org"
+	XGBoostJobsCRD = "xgboostjobs.kubeflow.org"
 )
 
 var (
@@ -67,24 +91,14 @@ func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w: %w", fwkNamePrefix, errFailedMappingResource, err)
 			}
-			if _, err = mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
-				if !meta.IsNoMatchError(err) {
-					return fmt.Errorf("%s: %w", fwkNamePrefix, err)
-				}
-				logger.Info("No matching API in the server for job framework, skipped setup of controller and webhook")
+			if !isAPIAvailable(mgr, RayCRDsName(), TrainingOperatorCRDsName()) {
+				logger.Info("API not available, waiting for it to become available... - Skipping setup of controller and webhook")
+				waitForAPIs(context.TODO(), logger, mgr, gvk, RayCRDsName(), TrainingOperatorCRDsName(), func() {
+					setupComponents(mgr, logger, gvk, fwkNamePrefix, cb, opts...)
+				})
 			} else {
-				if err = cb.NewReconciler(
-					mgr.GetClient(),
-					mgr.GetEventRecorderFor(fmt.Sprintf("%s-%s-controller", name, options.ManagerName)),
-					opts...,
-				).SetupWithManager(mgr); err != nil {
-					return fmt.Errorf("%s: %w", fwkNamePrefix, err)
-				}
-				if err = cb.SetupWebhook(mgr, opts...); err != nil {
-					return fmt.Errorf("%s: unable to create webhook: %w", fwkNamePrefix, err)
-				}
-				logger.Info("Set up controller and webhook for job framework")
-				return nil
+				logger.Info("API is available, setting up components...")
+				setupComponents(mgr, logger, gvk, fwkNamePrefix, cb, opts...)
 			}
 		}
 		if err := noop.SetupWebhook(mgr, cb.JobType); err != nil {
@@ -92,6 +106,39 @@ func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 		}
 		return nil
 	})
+}
+
+func setupComponents(mgr ctrl.Manager, log logr.Logger, gvk schema.GroupVersionKind, fwkNamePrefix string, cb IntegrationCallbacks, opts ...Option) {
+	// Attempt to get the REST mapping for the GVK
+	if _, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+		if !meta.IsNoMatchError(err) {
+			log.Error(err, fmt.Sprintf("%s: unable to get REST mapping", fwkNamePrefix))
+			return
+		}
+		log.Info("No matching API in the server for job framework, skipped setup of controller and webhook")
+	} else {
+		if err := setupControllerAndWebhook(mgr, gvk, fwkNamePrefix, cb, opts...); err != nil {
+			log.Error(err, "Failed to set up controller and webhook")
+		} else {
+			log.Info("Set up controller and webhook for job framework")
+		}
+	}
+}
+
+func setupControllerAndWebhook(mgr ctrl.Manager, gvk schema.GroupVersionKind, fwkNamePrefix string, cb IntegrationCallbacks, opts ...Option) error {
+	if err := cb.NewReconciler(
+		mgr.GetClient(),
+		mgr.GetEventRecorderFor(fmt.Sprintf("%s-%s-controller", gvk.Kind, "managerName")), // Ensure managerName is defined or fetched
+		opts...,
+	).SetupWithManager(mgr); err != nil {
+		return fmt.Errorf("%s: %w", fwkNamePrefix, err)
+	}
+
+	if err := cb.SetupWebhook(mgr, opts...); err != nil {
+		return fmt.Errorf("%s: unable to create webhook: %w", fwkNamePrefix, err)
+	}
+
+	return nil
 }
 
 // SetupIndexes setups the indexers for integrations.
@@ -109,4 +156,89 @@ func SetupIndexes(ctx context.Context, indexer client.FieldIndexer, opts ...Opti
 		}
 		return nil
 	})
+}
+
+func isAPIAvailable(mgr ctrl.Manager, rcApiNames []string, toApiNames []string) bool {
+	discoveryClient := discovery.NewDiscoveryClientForConfigOrDie(mgr.GetConfig())
+	apiGroupResources, err := restmapper.GetAPIGroupResources(discoveryClient)
+	exitOnError(err, "unable to get API group resources")
+
+	restMapper := restmapper.NewDiscoveryRESTMapper(apiGroupResources)
+	checkAPIs := func(apiNames []string) bool {
+		for _, apiName := range apiNames {
+			_, err = restMapper.KindFor(schema.GroupVersionResource{Resource: apiName})
+			if err == nil {
+				return true
+			}
+		}
+		return false
+	}
+
+	if checkAPIs(rcApiNames) || checkAPIs(toApiNames) {
+		return true
+	}
+	return false
+}
+
+func waitForAPIs(ctx context.Context, log logr.Logger, mgr ctrl.Manager, gvk schema.GroupVersionKind, rcApiNames []string, toApiNames []string, action func()) {
+	if isAPIAvailable(mgr, rcApiNames, toApiNames) {
+		log.Info("At least one of the required APIs is available, invoking action")
+		action()
+		return
+	}
+
+	// Wait for the API to become available then invoke action
+	log.Info("Required APIs not available, setting up retry watcher")
+	dynamicClient := dynamic.NewForConfigOrDie(mgr.GetConfig())
+	resource := schema.GroupVersionResource{Group: gvk.Group, Version: gvk.Version, Resource: "jobs"}
+	listWatch := &cache.ListWatch{
+		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
+			return dynamicClient.Resource(resource).List(ctx, options)
+		},
+		WatchFunc: func(options metav1.ListOptions) (watch.Interface, error) {
+			return dynamicClient.Resource(resource).Watch(ctx, options)
+		},
+	}
+
+	// Perform an initial list to get the resource version
+	list, err := dynamicClient.Resource(resource).List(ctx, metav1.ListOptions{})
+	exitOnError(err, "unable to list resources")
+
+	retryWatcher, err := retrywatch.NewRetryWatcher(list.GetResourceVersion(), listWatch)
+	exitOnError(err, "unable to create retry watcher")
+
+	defer retryWatcher.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case event := <-retryWatcher.ResultChan():
+			switch event.Type {
+			case watch.Error:
+				exitOnError(apierrors.FromObject(event.Object), "error watching for APIs")
+
+			case watch.Added, watch.Modified:
+				if isAPIAvailable(mgr, rcApiNames, toApiNames) {
+					log.Info("Required APIs installed, invoking deferred action")
+					action()
+					return
+				}
+			}
+		}
+	}
+}
+
+func RayCRDsName() []string {
+	return []string{RayClusterCRD, RayJobCRD, RayServiceCRD}
+}
+
+func TrainingOperatorCRDsName() []string {
+	return []string{MPIJobsCRD, MXJobsCRD, PaddleJobsCRD, PyTorchJobsCRD, TFJobsCRD, XGBoostJobsCRD}
+}
+
+func exitOnError(err error, msg string) {
+	if err != nil {
+		fmt.Print(err, msg)
+		os.Exit(1)
+	}
 }

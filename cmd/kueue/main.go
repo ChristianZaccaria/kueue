@@ -99,10 +99,12 @@ func init() {
 }
 
 func main() {
+	namespace := "kueue-system"
 	var configFile string
 	flag.StringVar(&configFile, "config", "",
 		"The controller will load its initial configuration from this file. "+
 			"Omit this flag to use the default configuration values. ")
+	flag.StringVar(&namespace, "leader-election-namespace", "kueue-system", "The namespace in which to create the leader election lock")
 
 	var featureGates string
 	flag.StringVar(&featureGates, "feature-gates", "", "A set of key=value pairs that describe feature gates for alpha/experimental features.")
@@ -128,6 +130,10 @@ func main() {
 	if err != nil {
 		setupLog.Error(err, "Unable to load the configuration")
 		os.Exit(1)
+	}
+
+	if options.LeaderElectionNamespace == "" {
+		options.LeaderElectionNamespace = namespace
 	}
 
 	metrics.Register()
