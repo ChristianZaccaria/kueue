@@ -168,7 +168,10 @@ func isAPIAvailable(mgr ctrl.Manager, rcApiNames []string, toApiNames []string) 
 		for _, apiName := range apiNames {
 			_, err = restMapper.KindFor(schema.GroupVersionResource{Resource: apiName})
 			if err == nil {
+				fmt.Printf("API available: %s\n", apiName)
 				return true
+			} else {
+				fmt.Printf("API not available: %s, error: %v\n", apiName, err)
 			}
 		}
 		return false
@@ -190,7 +193,7 @@ func waitForAPIs(ctx context.Context, log logr.Logger, mgr ctrl.Manager, gvk sch
 	// Wait for the API to become available then invoke action
 	log.Info("Required APIs not available, setting up retry watcher")
 	dynamicClient := dynamic.NewForConfigOrDie(mgr.GetConfig())
-	resource := schema.GroupVersionResource{Group: gvk.Group, Version: gvk.Version, Resource: "jobs"}
+	resource := schema.GroupVersionResource{Group: "apiextensions.k8s.io", Version: gvk.Version, Resource: "customresourcedefinitions"}
 	listWatch := &cache.ListWatch{
 		ListFunc: func(options metav1.ListOptions) (runtime.Object, error) {
 			return dynamicClient.Resource(resource).List(ctx, options)
