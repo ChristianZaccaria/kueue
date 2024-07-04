@@ -44,15 +44,15 @@ import (
 )
 
 const (
-	RayClusterCRD  = "rayclusters.ray.io"
-	RayJobCRD      = "rayjobs.ray.io"
-	RayServiceCRD  = "rayservices.ray.io"
-	MPIJobsCRD     = "mpijobs.kubeflow.org"
-	MXJobsCRD      = "mxjobs.kubeflow.org"
-	PaddleJobsCRD  = "paddlejobs.kubeflow.org"
-	PyTorchJobsCRD = "pytorchjobs.kubeflow.org"
-	TFJobsCRD      = "tfjobs.kubeflow.org"
-	XGBoostJobsCRD = "xgboostjobs.kubeflow.org"
+	RayCluster  = "RayCluster"
+	RayJob      = "RayJob"
+	RayService  = "RayService"
+	MPIJobs     = "MPIJob"
+	MXJobs      = "MXJob"
+	PaddleJobs  = "PaddleJob"
+	PyTorchJobs = "PyTorchJob"
+	TFJobs      = "TFJob"
+	XGBoostJobs = "XGBoostJob"
 )
 
 var (
@@ -93,7 +93,7 @@ func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 			}
 			if !isAPIAvailable(mgr, RayCRDsName(), TrainingOperatorCRDsName()) {
 				logger.Info("API not available, waiting for it to become available... - Skipping setup of controller and webhook")
-				waitForAPIs(context.TODO(), logger, mgr, gvk, RayCRDsName(), TrainingOperatorCRDsName(), func() {
+				waitForAPIs(context.Background(), logger, mgr, gvk, RayCRDsName(), TrainingOperatorCRDsName(), func() {
 					setupComponents(mgr, logger, gvk, fwkNamePrefix, cb, opts...)
 				})
 			} else {
@@ -167,20 +167,17 @@ func isAPIAvailable(mgr ctrl.Manager, rcApiNames []string, toApiNames []string) 
 	checkAPIs := func(apiNames []string) bool {
 		for _, apiName := range apiNames {
 			_, err = restMapper.KindFor(schema.GroupVersionResource{Resource: apiName})
-			if err == nil {
-				fmt.Printf("API available: %s\n", apiName)
-				return true
-			} else {
+			if err != nil {
 				fmt.Printf("API not available: %s, error: %v\n", apiName, err)
+				return false
+			} else {
+				fmt.Printf("API available: %s\n", apiName)
 			}
 		}
-		return false
-	}
-
-	if checkAPIs(rcApiNames) || checkAPIs(toApiNames) {
 		return true
 	}
-	return false
+
+	return checkAPIs(rcApiNames) || checkAPIs(toApiNames)
 }
 
 func waitForAPIs(ctx context.Context, log logr.Logger, mgr ctrl.Manager, gvk schema.GroupVersionKind, rcApiNames []string, toApiNames []string, action func()) {
@@ -232,11 +229,11 @@ func waitForAPIs(ctx context.Context, log logr.Logger, mgr ctrl.Manager, gvk sch
 }
 
 func RayCRDsName() []string {
-	return []string{RayClusterCRD, RayJobCRD, RayServiceCRD}
+	return []string{RayCluster, RayJob, RayService}
 }
 
 func TrainingOperatorCRDsName() []string {
-	return []string{MPIJobsCRD, MXJobsCRD, PaddleJobsCRD, PyTorchJobsCRD, TFJobsCRD, XGBoostJobsCRD}
+	return []string{MPIJobs, MXJobs, PaddleJobs, PyTorchJobs, TFJobs, XGBoostJobs}
 }
 
 func exitOnError(err error, msg string) {
