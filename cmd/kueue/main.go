@@ -169,7 +169,7 @@ func main() {
 	cCache := cache.New(mgr.GetClient(), cacheOptions...)
 	queues := queue.NewManager(mgr.GetClient(), cCache, queueOptions...)
 
-	ctx := ctrl.SetupSignalHandler()
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 	if err := setupIndexes(ctx, mgr, &cfg); err != nil {
 		setupLog.Error(err, "Unable to setup indexes")
 		os.Exit(1)
@@ -182,7 +182,7 @@ func main() {
 	// Cert won't be ready until manager starts, so start a goroutine here which
 	// will block until the cert is ready before setting up the controllers.
 	// Controllers who register after manager starts will start directly.
-	go setupControllers(mgr, cCache, queues, certsReady, &cfg, serverVersionFetcher)
+	go setupControllers(mgr, cCache, queues, certsReady, cancel, &cfg, serverVersionFetcher)
 
 	go func() {
 		queues.CleanUpOnContext(ctx)
@@ -233,7 +233,7 @@ func setupIndexes(ctx context.Context, mgr ctrl.Manager, cfg *configapi.Configur
 	return jobframework.SetupIndexes(ctx, mgr.GetFieldIndexer(), opts...)
 }
 
-func setupControllers(mgr ctrl.Manager, cCache *cache.Cache, queues *queue.Manager, certsReady chan struct{}, cfg *configapi.Configuration, serverVersionFetcher *kubeversion.ServerVersionFetcher) {
+func setupControllers(mgr ctrl.Manager, cCache *cache.Cache, queues *queue.Manager, certsReady chan struct{}, cancel context.CancelFunc, cfg *configapi.Configuration, serverVersionFetcher *kubeversion.ServerVersionFetcher) {
 	// The controllers won't work until the webhooks are operating, and the webhook won't work until the
 	// certs are all in place.
 	cert.WaitForCertsReady(setupLog, certsReady)
@@ -286,7 +286,7 @@ func setupControllers(mgr ctrl.Manager, cCache *cache.Cache, queues *queue.Manag
 		jobframework.WithCache(cCache),
 		jobframework.WithQueues(queues),
 	}
-	if err := jobframework.SetupControllers(mgr, setupLog, opts...); err != nil {
+	if err := jobframework.SetupControllers(mgr, setupLog, cancel, opts...); err != nil {
 		setupLog.Error(err, "Unable to create controller or webhook", "kubernetesVersion", serverVersionFetcher.GetServerVersion())
 		os.Exit(1)
 	}
