@@ -21,9 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -44,7 +46,7 @@ var (
 // this function needs to be called after the certs get ready because the controllers won't work
 // until the webhooks are operating, and the webhook won't work until the
 // certs are all in place.
-func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
+func SetupControllers(mgr ctrl.Manager, log logr.Logger, cancel context.CancelFunc, opts ...Option) error {
 	options := ProcessOptions(opts...)
 
 	for fwkName := range options.EnabledExternalFrameworks {
@@ -67,11 +69,15 @@ func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 			if err != nil {
 				return fmt.Errorf("%s: %w: %w", fwkNamePrefix, errFailedMappingResource, err)
 			}
-			if _, err = mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
+			if _, err := mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version); err != nil {
 				if !meta.IsNoMatchError(err) {
 					return fmt.Errorf("%s: %w", fwkNamePrefix, err)
 				}
 				logger.Info("No matching API in the server for job framework, skipped setup of controller and webhook")
+				go waitForAPI(context.Background(), mgr, logger, gvk, func() {
+					log.Info("API now available, triggering restart of Kueue pod")
+					cancel()
+				})
 			} else {
 				if err = cb.NewReconciler(
 					mgr.GetClient(),
@@ -92,6 +98,27 @@ func SetupControllers(mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 		}
 		return nil
 	})
+}
+
+func waitForAPI(ctx context.Context, mgr ctrl.Manager, log logr.Logger, gvk schema.GroupVersionKind, action func()) {
+	getRestMapping := func() (*meta.RESTMapping, error) {
+		return mgr.GetRESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	}
+	var err error
+	for {
+		_, err = getRestMapping()
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				log.Info(fmt.Sprint("Context cancelled!", "gvk", gvk))
+				return
+			case <-time.After(time.Second * 5):
+				continue
+			}
+		}
+		break
+	}
+	action()
 }
 
 // SetupIndexes setups the indexers for integrations.

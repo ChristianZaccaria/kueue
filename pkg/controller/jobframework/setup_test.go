@@ -72,6 +72,7 @@ func TestSetupControllers(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			_, cancel := context.WithCancel(context.Background())
 			_, logger := utiltesting.ContextWithLog(t)
 			k8sClient := utiltesting.NewClientBuilder(jobset.AddToScheme, kubeflow.AddToScheme, kftraining.AddToScheme, rayv1.AddToScheme).Build()
 
@@ -97,7 +98,7 @@ func TestSetupControllers(t *testing.T) {
 				t.Fatalf("Failed to setup manager: %v", err)
 			}
 
-			gotError := SetupControllers(mgr, logger, tc.opts...)
+			gotError := SetupControllers(mgr, logger, cancel, tc.opts...)
 			if diff := cmp.Diff(tc.wantError, gotError, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Errorf("Unexpected error from SetupControllers (-want,+got):\n%s", diff)
 			}
