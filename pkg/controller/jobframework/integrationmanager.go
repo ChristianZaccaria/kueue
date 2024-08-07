@@ -207,7 +207,7 @@ func EnableIntegration(name string) {
 // Mark the frameworks identified by names and return a revert function.
 func EnableIntegrationsForTest(tb testing.TB, names ...string) func() {
 	tb.Helper()
-	old := manager.enabledIntegrations.Clone()
+	old := manager.enabledIntegrations
 	for _, name := range names {
 		manager.enableIntegration(name)
 	}
