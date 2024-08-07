@@ -20,7 +20,6 @@ import (
 	"context"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -92,7 +91,7 @@ func TestSetupControllers(t *testing.T) {
 		mapperGVKs              []schema.GroupVersionKind
 		wantError               error
 		wantEnabledIntegrations []string
-		afterSetup              func(mgr ctrlmgr.Manager, manager *integrationManager)
+		afterSetup              func(t *testing.T, ctx context.Context)
 	}{
 		"setup controllers succeed": {
 			opts: []Option{
@@ -132,6 +131,8 @@ func TestSetupControllers(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
 			manager := integrationManager{}
 			for name, cbs := range availableIntegrations {
 				err := manager.register(name, cbs)
@@ -165,16 +166,16 @@ func TestSetupControllers(t *testing.T) {
 				t.Fatalf("Failed to setup manager: %v", err)
 			}
 
-			gotError := manager.setupControllers(context.Background(), mgr, logger, tc.opts...)
+			gotError := manager.setupControllers(ctx, cancel, mgr, logger, tc.opts...)
 			if diff := cmp.Diff(tc.wantError, gotError, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Errorf("Unexpected error from SetupControllers (-want,+got):\n%s", diff)
 			}
 
 			if tc.afterSetup != nil {
-				tc.afterSetup(mgr, &manager)
+				tc.afterSetup(t, ctx)
 			}
 
-			diff := cmp.Diff(tc.wantEnabledIntegrations, manager.getEnabledIntegrations().SortedList())
+			diff := cmp.Diff(tc.wantEnabledIntegrations, manager.enabledIntegrations.SortedList())
 			if len(diff) != 0 {
 				t.Errorf("Unexpected enabled integrations (-want,+got):\n%s", diff)
 			}
@@ -182,13 +183,9 @@ func TestSetupControllers(t *testing.T) {
 	}
 }
 
-func testDelayedIntegration(mgr ctrlmgr.Manager, manager *integrationManager) {
-	for {
-		_, ok := manager.getEnabledIntegrations()["ray.io/raycluster"]
-		if ok {
-			break // Exit loop if RayCluster is enabled
-		}
-		time.Sleep(10 * time.Millisecond)
+func testDelayedIntegration(t *testing.T, ctx context.Context) {
+	if ctx.Err() == context.Canceled {
+		t.Skip("Context has been canceled, Kueue pod will restart...")
 	}
 }
 

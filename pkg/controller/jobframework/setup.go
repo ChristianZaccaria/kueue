@@ -49,11 +49,11 @@ var (
 // this function needs to be called after the certs get ready because the controllers won't work
 // until the webhooks are operating, and the webhook won't work until the
 // certs are all in place.
-func SetupControllers(ctx context.Context, mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
-	return manager.setupControllers(ctx, mgr, log, opts...)
+func SetupControllers(ctx context.Context, cancel context.CancelFunc, mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
+	return manager.setupControllers(ctx, cancel, mgr, log, opts...)
 }
 
-func (m *integrationManager) setupControllers(ctx context.Context, mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
+func (m *integrationManager) setupControllers(ctx context.Context, cancel context.CancelFunc, mgr ctrl.Manager, log logr.Logger, opts ...Option) error {
 	options := ProcessOptions(opts...)
 
 	for fwkName := range options.EnabledExternalFrameworks {
@@ -83,9 +83,7 @@ func (m *integrationManager) setupControllers(ctx context.Context, mgr ctrl.Mana
 				logger.Info("No matching API in the server for job framework, skipped setup of controller and webhook")
 				go waitForAPI(ctx, mgr, defaultCheckAPIAvailable, log, gvk, func() {
 					log.Info(fmt.Sprintf("API now available, starting controller and webhook for %v", gvk))
-					if err := m.setupControllerAndWebhook(mgr, name, fwkNamePrefix, cb, options, opts...); err != nil {
-						log.Error(err, "Failed to setup controller and webhook for job framework")
-					}
+					cancel()
 				})
 			} else {
 				if err := m.setupControllerAndWebhook(mgr, name, fwkNamePrefix, cb, options, opts...); err != nil {
