@@ -34,8 +34,6 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/jobs/noop"
 )
 
-type checkAPIAvailableFunc func(mgr ctrl.Manager, gvk schema.GroupVersionKind) (bool, error)
-
 var (
 	errFailedMappingResource = errors.New("restMapper failed mapping resource")
 )
@@ -81,7 +79,7 @@ func (m *integrationManager) setupControllers(ctx context.Context, mgr ctrl.Mana
 					return fmt.Errorf("%s: %w", fwkNamePrefix, err)
 				}
 				logger.Info("No matching API in the server for job framework, skipped setup of controller and webhook")
-				go waitForAPI(ctx, mgr, defaultCheckAPIAvailable, log, gvk, func() {
+				go waitForAPI(ctx, mgr, log, gvk, func() {
 					log.Info(fmt.Sprintf("API now available, starting controller and webhook for %v", gvk))
 					if err := m.setupControllerAndWebhook(mgr, name, fwkNamePrefix, cb, options, opts...); err != nil {
 						log.Error(err, "Failed to setup controller and webhook for job framework")
@@ -115,13 +113,13 @@ func (m *integrationManager) setupControllerAndWebhook(mgr ctrl.Manager, name st
 	return nil
 }
 
-func waitForAPI(ctx context.Context, mgr ctrl.Manager, checkAPIAvailable checkAPIAvailableFunc, log logr.Logger, gvk schema.GroupVersionKind, action func()) {
+func waitForAPI(ctx context.Context, mgr ctrl.Manager, log logr.Logger, gvk schema.GroupVersionKind, action func()) {
 	rateLimiter := workqueue.NewItemExponentialFailureRateLimiter(100*time.Millisecond, 100*time.Second)
 	item := gvk.String()
 
 	for {
-		isAvailable, err := checkAPIAvailable(mgr, gvk)
-		if isAvailable {
+		isAvailable, err := getRESTMapping(mgr, gvk)
+		if isAvailable != nil {
 			rateLimiter.Forget(item)
 			action()
 			return
@@ -144,14 +142,6 @@ func getRESTMapping(mgr ctrl.Manager, gvk schema.GroupVersionKind) (*meta.RESTMa
 		return nil, fmt.Errorf("failed to get REST mapping for %v: %w", gvk, err)
 	}
 	return restMapping, nil
-}
-
-var defaultCheckAPIAvailable checkAPIAvailableFunc = func(mgr ctrl.Manager, gvk schema.GroupVersionKind) (bool, error) {
-	_, err := getRESTMapping(mgr, gvk)
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // SetupIndexes setups the indexers for integrations.

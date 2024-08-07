@@ -37,21 +37,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlmgr "sigs.k8s.io/controller-runtime/pkg/manager"
 	jobset "sigs.k8s.io/jobset/api/jobset/v1alpha2"
-
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta1"
 	"sigs.k8s.io/kueue/pkg/util/slices"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 )
 
 func TestSetupControllers(t *testing.T) {
-	// Simulate Job Framework API checks
-	defaultCheckAPIAvailable = func(mgr ctrlmgr.Manager, gvk schema.GroupVersionKind) (bool, error) {
-		// Simulate API being unavailable for MPIJob
-		if gvk.Kind == "MPIJob" {
-			return false, nil
-		}
-		return true, nil // Simulate API becoming available
-	}
 	availableIntegrations := map[string]IntegrationCallbacks{
 		"batch/job": {
 			NewReconciler:         testNewReconciler,
@@ -183,6 +174,10 @@ func TestSetupControllers(t *testing.T) {
 }
 
 func testDelayedIntegration(mgr ctrlmgr.Manager, manager *integrationManager) {
+	rayGVK := schema.GroupVersionKind{Group: "ray.io", Version: "v1", Kind: "RayCluster"}
+	mgr.GetRESTMapper().(*apimeta.DefaultRESTMapper).Add(rayGVK, apimeta.RESTScopeNamespace)
+
+	// Wait for setup to complete
 	for {
 		_, ok := manager.getEnabledIntegrations()["ray.io/raycluster"]
 		if ok {
