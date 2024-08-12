@@ -20,6 +20,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -43,6 +44,14 @@ import (
 )
 
 func TestSetupControllers(t *testing.T) {
+	// Simulate Job Framework API checks
+	defaultCheckAPIAvailable = func(mgr ctrlmgr.Manager, gvk schema.GroupVersionKind) (bool, error) {
+		// Simulate API being unavailable for MPIJob
+		if gvk.Kind == "MPIJob" {
+			return false, nil
+		}
+		return true, nil // Simulate API becoming available
+	}
 	availableIntegrations := map[string]IntegrationCallbacks{
 		"batch/job": {
 			NewReconciler:         testNewReconciler,
@@ -68,6 +77,14 @@ func TestSetupControllers(t *testing.T) {
 			AddToScheme:           testAddToScheme,
 			CanSupportIntegration: testCanSupportIntegration,
 		},
+		"ray.io/raycluster": {
+			NewReconciler:         testNewReconciler,
+			SetupWebhook:          testSetupWebhook,
+			JobType:               &rayv1.RayCluster{},
+			SetupIndexes:          testSetupIndexes,
+			AddToScheme:           testAddToScheme,
+			CanSupportIntegration: testCanSupportIntegration,
+		},
 	}
 
 	cases := map[string]struct {
@@ -75,6 +92,7 @@ func TestSetupControllers(t *testing.T) {
 		mapperGVKs              []schema.GroupVersionKind
 		wantError               error
 		wantEnabledIntegrations []string
+		afterSetup              func(mgr ctrlmgr.Manager, manager *integrationManager)
 	}{
 		"setup controllers succeed": {
 			opts: []Option{
@@ -98,6 +116,18 @@ func TestSetupControllers(t *testing.T) {
 				batchv1.SchemeGroupVersion.WithKind("Job"),
 			},
 			wantEnabledIntegrations: []string{"batch/job"},
+		},
+		"mapper doesn't have ray.io/raycluster when Controllers have been setup, but eventually does": {
+			opts: []Option{
+				WithEnabledFrameworks([]string{"batch/job", "kubeflow.org/mpijob", "ray.io/raycluster"}),
+			},
+			mapperGVKs: []schema.GroupVersionKind{
+				batchv1.SchemeGroupVersion.WithKind("Job"),
+				kubeflow.SchemeGroupVersionKind,
+				// Not including RayCluster
+			},
+			wantEnabledIntegrations: []string{"batch/job", "kubeflow.org/mpijob", "ray.io/raycluster"},
+			afterSetup:              testDelayedIntegration,
 		},
 	}
 	for name, tc := range cases {
@@ -134,15 +164,30 @@ func TestSetupControllers(t *testing.T) {
 				t.Fatalf("Failed to setup manager: %v", err)
 			}
 
-			gotError := manager.setupControllers(mgr, logger, tc.opts...)
+			gotError := manager.setupControllers(context.Background(), mgr, logger, tc.opts...)
 			if diff := cmp.Diff(tc.wantError, gotError, cmpopts.EquateErrors()); len(diff) != 0 {
 				t.Errorf("Unexpected error from SetupControllers (-want,+got):\n%s", diff)
 			}
 
-			if diff := cmp.Diff(tc.wantEnabledIntegrations, manager.enabledIntegrations.SortedList()); len(diff) != 0 {
+			if tc.afterSetup != nil {
+				tc.afterSetup(mgr, &manager)
+			}
+
+			diff := cmp.Diff(tc.wantEnabledIntegrations, manager.getEnabledIntegrations().SortedList())
+			if len(diff) != 0 {
 				t.Errorf("Unexpected enabled integrations (-want,+got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func testDelayedIntegration(mgr ctrlmgr.Manager, manager *integrationManager) {
+	for {
+		_, ok := manager.getEnabledIntegrations()["ray.io/raycluster"]
+		if ok {
+			break // Exit loop if RayCluster is enabled
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
