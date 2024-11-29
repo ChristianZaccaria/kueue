@@ -1,7 +1,7 @@
 # RHOAI configuration for Kueue.
 
 # Adds namespace to all resources.
-namespace: opendatahub
+namespace: redhat-ods-applications
 
 # Value of this field is prepended to the
 # names of all resources, e.g. a deployment named
@@ -44,6 +44,8 @@ resources:
 - batch-user-rolebinding.yaml
 - kueue-metrics-service.yaml
 - prometheus_rule.yaml
+- validating_admission_policy.yaml
+- validating_admission_policy_binding.yaml
 
 patches:
 # Mount the controller config file for loading manager configurations

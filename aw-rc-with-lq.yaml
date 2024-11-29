@@ -1,0 +1,36 @@
+apiVersion: workload.codeflare.dev/v1beta2
+kind: AppWrapper
+metadata:
+  name: test-appwrapper
+  namespace: regularuser
+  labels:
+    kueue.x-k8s.io/queue-name: team-a-queue
+spec:
+  components:
+    - template:
+        apiVersion: ray.io/v1alpha1
+        kind: RayCluster
+        metadata:
+          name: test-raycluster
+          namespace: regularuser
+        spec:
+          headGroupSpec:
+            replicas: 1
+            rayStartParams: {}
+            template:
+              spec:
+                containers:
+                  - name: ray-head
+                    image: rayproject/ray:latest
+                    ports:
+                      - name: redis
+                        containerPort: 6379
+          workerGroupSpecs:
+            - replicas: 1
+              groupName: workers
+              rayStartParams: {}
+              template:
+                spec:
+                  containers:
+                    - name: ray-worker
+                      image: rayproject/ray:latest

@@ -61,8 +61,4 @@ function kueue_deploy {
     cluster_kueue_deploy $KIND_CLUSTER_NAME
 }
 
-trap cleanup EXIT
 startup
-kind_load
-kueue_deploy
-$GINKGO $GINKGO_ARGS --junit-report=junit.xml --output-dir=$ARTIFACTS -v ./test/e2e/singlecluster/...

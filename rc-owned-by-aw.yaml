@@ -1,0 +1,31 @@
+apiVersion: ray.io/v1alpha1
+kind: RayCluster
+metadata:
+  name: test-appwrapper-raycluster
+  namespace: test-namespace
+  ownerReferences:
+  - apiVersion: workload.codeflare.dev/v1beta2
+    kind: AppWrapper
+    name: test-appwrapper
+    uid: a733e451-a234-4d26-ab48-083988d29c24 # swap for appwrapper uid when created.
+spec:
+  headGroupSpec:
+    replicas: 1
+    rayStartParams: {}
+    template:
+      spec:
+        containers:
+          - name: ray-head
+            image: rayproject/ray:latest
+            ports:
+              - name: redis
+                containerPort: 6379
+  workerGroupSpecs:
+    - replicas: 1
+      groupName: workers
+      rayStartParams: {}
+      template:
+        spec:
+          containers:
+            - name: ray-worker
+              image: rayproject/ray:latest
